@@ -9,8 +9,8 @@ import subprocess
 
 ICMP_ECHO_REQUEST = 8
 TIME_OUT = 1
-WATCHDOG_PORT = 3000
-LOCAL_HOST = "127.0.0.1"
+WATCHDOG_PORT = 9999
+LOCAL_HOST = "localhost"
 
 class ping:
     #constructor
@@ -18,7 +18,6 @@ class ping:
         self.id_1 = id1
         self.id_2 = id2
         
-
     #standard checksum function
     def checksum(self, source_string):
         sum = 0
@@ -77,8 +76,15 @@ class ping:
         #my_socket.sendto(header+data, (dest_addr, 1))
 
         # Create a separate connection to the watchdog server
+        
         watchdog_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        watchdog_socket.connect((LOCAL_HOST, WATCHDOG_PORT))
+        try:
+            watchdog_socket.connect((LOCAL_HOST, WATCHDOG_PORT))
+        except ConnectionRefusedError:
+            print("Error: Connection to the watchdog server was refused.")
+            # Perform necessary error handling or exit the program
+            sys.exit(1)
+
 
         # Send the ping packet
         my_socket.sendto(header+data, (dest_addr, 1))

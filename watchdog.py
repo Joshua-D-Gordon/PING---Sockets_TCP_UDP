@@ -2,15 +2,16 @@ import socket
 import time
 
 
-WATCHDOG_PORT = 3000
+WATCHDOG_PORT = 9999
 WATCHDOG_TIMEOUT = 10  # Timeout in seconds
-LOCAL_HOST = "127.0.0.1"
+LOCAL_HOST = "localhost"
 
 def start_watchdog():
     timer = WATCHDOG_TIMEOUT
+    
+    watchdog_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    watchdog_socket.bind((LOCAL_HOST, WATCHDOG_PORT))
     try:
-        watchdog_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        watchdog_socket.bind((LOCAL_HOST, WATCHDOG_PORT))
         watchdog_socket.listen()
         connection, addr = watchdog_socket.accept()
         print('Connected by', addr)
