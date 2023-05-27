@@ -1,138 +1,137 @@
 import os
 import sys
-import time
-import struct
 import socket
+import struct
 import select
+import time
 import threading
 import subprocess
 
-
-ICMP_ECHO_REQUEST = 8  # ICMP ECHO REQUEST packet type
+ICMP_ECHO_REQUEST = 8
+TIME_OUT = 1
 WATCHDOG_PORT = 3000
-WATCHDOG_TIMEOUT = 10  # Timeout in seconds
+LOCAL_HOST = "127.0.0.1"
+
+class ping:
+    #constructor
+    def __init__(self, id1, id2):
+        self.id_1 = id1
+        self.id_2 = id2
+        
+
+    #standard checksum function
+    def checksum(self, source_string):
+        sum = 0
+        countTo = (len(source_string) // 2) * 2
+
+        for count in range(0, countTo, 2):
+            thisVal = (source_string[count + 1] << 8) + source_string[count]
+            sum += thisVal & 0xffff
+
+        if countTo < len(source_string):
+            sum += source_string[len(source_string) - 1] & 0xffff
+
+        sum = (sum >> 16) + (sum & 0xffff)
+        sum += (sum >> 16)
+
+        answer = (~sum) & 0xffff
+        answer = (answer >> 8) | ((answer << 8) & 0xff00)
+
+        #converting to network byte order
+        return socket.htons(answer)
+
+    def receive_ping(self, my_socket, seq, ID, timeout):
+        start_time = time.time()
+        elapsed_time = time.time() - start_time
+        time_left = timeout - elapsed_time
+        if time_left <= 0:
+            print(f"Request timed out")
+            return
+        try:
+            ready, _, _ = select.select([my_socket], [], [], time_left)
+            if ready:
+                rec_packet, _ = my_socket.recvfrom(1024)
+                icmp_header = rec_packet[20:28]
+                type_, code_, _, packet_ID_, _ = struct.unpack("bbHHh", icmp_header)
+
+                if packet_ID_ == ID:
+                    time_sent = struct.unpack("d", rec_packet[28:36])[0]
+                    ttl = struct.unpack("B", rec_packet[8:9])[0]
+                    delay =  (time.time() - time_sent)*1000
+                    
+                    print(f"Reply from {dest_addr}: bytes=32 seq={seq} TTL={ttl} time={delay:.3f}ms")
+                    
+        except select.error:
+            print("error in function receive ping")
+            return
+            
 
 
-def calculate_checksum(data):
-    """Calculate the ICMP checksum."""
-    checksum = 0
-    count_to = (len(data) // 2) * 2
 
-    for count in range(0, count_to, 2):
-        checksum += (data[count + 1] << 8) + data[count]
+    def send_ping(self, my_socket, dest_addr, ID):
+        
+        header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, 0, ID, 1)
+        data = struct.pack("d", time.time())
+        header = struct.pack("bbHHh", ICMP_ECHO_REQUEST, 0, p1.checksum(header + data), ID, 1)
 
-    if count_to < len(data):
-        checksum += data[len(data) - 1]
+        #my_socket.sendto(header+data, (dest_addr, 1))
 
-    checksum &= 0xFFFF
-    return checksum
+        # Create a separate connection to the watchdog server
+        watchdog_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        watchdog_socket.connect((LOCAL_HOST, WATCHDOG_PORT))
 
+        # Send the ping packet
+        my_socket.sendto(header+data, (dest_addr, 1))
+        
+        # Update watchdog that ping has been sent
+        watchdog_socket.sendall('sent'.encode())
+        
+        # Close the watchdog socket
+        watchdog_socket.close()
+    def ping(self,dest_addr,seq):
+        #make raw socket
+        try:
+            icmp_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.getprotobyname("icmp"))
+        except:
+            print("error icmp socket could not be made")
+            exit(1)
 
-def send_ping_request(icmp_socket, dest_addr):
-    """Send an ICMP ECHO REQUEST packet."""
-
-    icmp_header = struct.pack('!BBHHH', ICMP_ECHO_REQUEST, 0, 0, 0, 1)
-    checksum = calculate_checksum(icmp_header)
-    icmp_header = struct.pack('!BBHHH', ICMP_ECHO_REQUEST, 0, checksum, 0, 1)
-    packet = icmp_header
-    print("sending packets to {}".format(dest_addr))
-    icmp_socket.sendto(packet, (dest_addr, 1))
-    print("packets sent to {}".format(dest_addr))
+        #send & recive ping
+        self.send_ping(icmp_socket, dest_addr, ID=os.getpid()) # os.getpid() gets .........
+        self.receive_ping(icmp_socket, seq, ID=os.getpid(), timeout=TIME_OUT) #timeout ...........
+        #close socket
+        icmp_socket.close()
     
-
-
-def receive_ping_reply(icmp_socket, start_time):
-    """Receive and process ICMP ECHO REPLY packets."""
-    try:
-        print("in try")
-        
-        received_packet, addr = icmp_socket.recvfrom(1024)
-        print("still in try")
-        time_elapsed = time.time() - start_time
-        print("still in try")
-        ip_header = received_packet[:20]
-        ip_version, _, _, _, _, _ = struct.unpack('!BBHHHBBH4s4s', ip_header)
-        print("still..... in try")
-        icmp_header = received_packet[20:28]
-        icmp_type, _, _, _, _ = struct.unpack('!BBHHH', icmp_header)
-        print("STILLL in try")
-        if icmp_type == ICMP_ECHO_REQUEST:
-            print(f'Received packet from {addr[0]}: seq=1 time={int(time_elapsed * 1000)}ms')
-
-            # Update the watchdog timer
-            subprocess.call(['echo', 'reset', '|', 'nc', 'localhost', '3000'])
-
-    except socket.timeout as e:
-        print('Request timed out.')
-        print(f'Exeption: {e}')
-
-
-def ping(dest_addr):
-    try:
-        dest_ip = socket.gethostbyname(dest_addr)
-        print(f'Pinging {dest_ip} with 32 bytes of data:')
-
-        icmp_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
-        icmp_socket.settimeout(1)
-        
+    def loop_ping(self,dest_addr):
+        seq = 0 #stating seqence number
         while True:
-            print("in true")
-            start_time = time.time()
-            """Send an ICMP ECHO REQUEST packet."""
-
-            icmp_header = struct.pack('!BBHHH', ICMP_ECHO_REQUEST, 0, 0, 0, 1)
-            checksum = calculate_checksum(icmp_header)
-            icmp_header = struct.pack('!BBHHH', ICMP_ECHO_REQUEST, 0, checksum, 0, 1)
-            packet = icmp_header
-            print("sending packets to {}".format(dest_addr))
-            icmp_socket.sendto(packet, (dest_addr, 1))
-            print("packets sent to {}".format(dest_addr))
-
-            """Receive and process ICMP ECHO REPLY packets."""
+            seq += 1
             try:
-                print("in try")
-                
-                received_packet, addr = icmp_socket.recvfrom(1024)
-                print("still in try")
-                time_elapsed = time.time() - start_time
-                print("still in try")
-                ip_header = received_packet[:20]
-                ip_version, _, _, _, _, _ = struct.unpack('!BBHHHBBH4s4s', ip_header)
-                print("still..... in try")
-                icmp_header = received_packet[20:28]
-                icmp_type, _, _, _, _ = struct.unpack('!BBHHH', icmp_header)
-                print("STILLL in try")
-                if icmp_type == ICMP_ECHO_REQUEST:
-                    print(f'Received packet from {addr[0]}: seq=1 time={int(time_elapsed * 1000)}ms')
-
-                    # Update the watchdog timer
-                    subprocess.call(['echo', 'reset', '|', 'nc', 'localhost', '3000'])
-
-            except socket.timeout as e:
-                print('Request timed out.')
-                print(f'Exeption: {e}')
-                
-            time.sleep(1)
-
-    except (socket.error, socket.gaierror, PermissionError) as e:
-        print(f'Ping failed: {str(e)}')
-        sys.exit(1)
-
+                p1.ping(dest_addr,seq)#ping ip address with seqence number
+                time.sleep(1)#sleep for watchdog thread
+            #end pinging
+            except KeyboardInterrupt:
+                print("\n*********************FINISHED***************************")
+                print("********************************************************")
+                print("\nStudent ID's: {} & {}".format(self.id_1,self.id_2))
+                exit(1)
 
 def start_watchdog():
     subprocess.call(['python3', 'watchdog.py'])
-
+    
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print('Usage: python ping.py <ip>')
+    if len(sys.argv) < 1:
+        print('rerun and enter a ip address to ping')
         sys.exit(1)
-
-    destination = sys.argv[1]
-
-    # Start the watchdog in a separate thread
+    
+    #creats new ping object with our id's
+    p1 = ping("332307073","332307074")
+    #starts watchdog thread
     watchdog_thread = threading.Thread(target=start_watchdog)
     watchdog_thread.start()
-    print("thread: watchdog started")
-
-    ping(destination)
+    time.sleep(2)
+    # recives ip address to ping
+    dest_addr = sys.argv[1]
+    #performs a ping loop
+    p1.loop_ping(dest_addr)
